@@ -204,7 +204,7 @@ with st.sidebar:
 # --------------------------
 # Tabs
 # --------------------------
-tab1, tab2 = st.tabs(["🔍 Análisis individual", "🏁 Comparador"])
+tab1, tab2 = st.tabs(["🔍 Análisis individual", "🏁 Comparar Tickets"])
 
 with tab1:
     if ticker:
