@@ -1,11 +1,14 @@
 # app.py
+import time
 import yfinance as yf
 import pandas as pd
 import numpy as np
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots 
+from plotly.subplots import make_subplots
+import statsmodels.api as sm
+
 
 # --------------------------
 # Config & helpers
@@ -31,22 +34,125 @@ def fmt_bil(x):
         return f"{x:.0f}"
     except Exception:
         return "—"
-    
 
 def calculate_period_performance(hist_df: pd.DataFrame) -> float | None:
     """Calcula el rendimiento porcentual para un DataFrame de historial de precios."""
     if hist_df.empty or "Close" not in hist_df.columns or len(hist_df) < 2:
         return None
-    
     first_close = float(hist_df["Close"].iloc[0])
     last_close = float(hist_df["Close"].iloc[-1])
-    
     if first_close > 0:
         return (last_close / first_close) - 1.0
     return None
 
+def risk_metrics(close: pd.Series, rf_annual: float = 0.0) -> dict:
+    """Métricas de riesgo clave sobre precios ajustados (auto_adjust=True)."""
+    if close is None or close.size < 2:
+        return {}
+    ret = close.pct_change().dropna()
+    if ret.empty:
+        return {}
+    ann_factor = 252
+    mu = ret.mean() * ann_factor
+    sigma = ret.std(ddof=0) * np.sqrt(ann_factor)
+    sharpe = (mu - rf_annual) / sigma if sigma and np.isfinite(sigma) else np.nan
+    # Drawdown
+    cum = (1 + ret).cumprod()
+    peak = cum.cummax()
+    dd = (cum / peak - 1.0)
+    max_dd = dd.min()
+    calmar = mu / abs(max_dd) if max_dd and max_dd < 0 else np.nan
+    return {
+        "Retorno Anualizado": mu,
+        "Volatilidad Anual": sigma,
+        "Sharpe": sharpe,
+        "Máx. Drawdown": max_dd,
+        "Calmar": calmar,
+    }
+
+def compute_beta(asset_close: pd.Series, bench_close: pd.Series) -> float | None:
+    ret_a = asset_close.pct_change().dropna()
+    ret_b = bench_close.pct_change().dropna()
+    df = pd.concat([ret_a, ret_b], axis=1).dropna()
+    if df.empty:
+        return None
+    cov = np.cov(df.iloc[:, 0], df.iloc[:, 1])[0, 1]
+    var_b = np.var(df.iloc[:, 1])
+    return cov / var_b if var_b else None
+
+def winsorize_series(s: pd.Series, low=0.01, high=0.99):
+    if s is None or s.empty:
+        return s
+    ql, qh = s.quantile([low, high])
+    return s.clip(lower=ql, upper=qh)
+
+# --------------------------
+# Descarga robusta (reintentos) y batch
+# --------------------------
+def _retry(fn, *args, retries=3, delay=0.8, **kwargs):
+    last = None
+    for i in range(retries):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            last = e
+            time.sleep(delay * (i + 1))
+    raise last
+
+def download_history_single(ticker: str, period: str, interval: str) -> pd.DataFrame:
+    hist = _retry(
+        yf.download, tickers=ticker, period=period, interval=interval,
+        progress=False, auto_adjust=True, threads=False
+    )
+    if isinstance(hist, pd.DataFrame) and not hist.empty:
+        if isinstance(hist.columns, pd.MultiIndex):
+            hist.columns = [c[0] for c in hist.columns]
+        return hist.dropna(subset=["Close"])
+    return pd.DataFrame()
+
+def download_history_batch(tickers: list[str], period: str, interval: str) -> dict[str, pd.DataFrame]:
+    if not tickers:
+        return {}
+    raw = _retry(
+        yf.download, tickers=tickers, period=period, interval=interval,
+        progress=False, auto_adjust=True, group_by='ticker', threads=True
+    )
+    out = {}
+    if isinstance(raw, pd.DataFrame) and not raw.empty and isinstance(raw.columns, pd.MultiIndex):
+        # Formato multi-ticker
+        first_level = raw.columns.get_level_values(0)
+        for tk in tickers:
+            if tk in first_level:
+                df = raw[tk].copy()
+                df = df.dropna(subset=["Close"])
+                out[tk] = df
+            else:
+                out[tk] = pd.DataFrame()
+    else:
+        # Fallback: quizá fue un solo ticker o respuesta plana
+        for tk in tickers:
+            try:
+                out[tk] = download_history_single(tk, period, interval)
+            except Exception:
+                out[tk] = pd.DataFrame()
+    return out
+
+def capm_alpha(asset_close, bench_close):
+    r_a = asset_close.pct_change().dropna()
+    r_b = bench_close.pct_change().dropna()
+    df = pd.concat([r_a, r_b], axis=1).dropna()
+    if df.empty: return None, None, None
+    X = sm.add_constant(df.iloc[:,1])
+    y = df.iloc[:,0]
+    model = sm.OLS(y, X).fit()
+    alpha = model.params.get("const")
+    beta  = model.params.iloc[1]
+    r2    = model.rsquared
+    return alpha, beta, r2
+
 # --------------------------
 # Funciones de obtención de datos con caching
+# --------------------------
 @st.cache_resource(show_spinner=False)
 def get_ticker_obj(ticker: str):
     # Objetos no serializables -> cache_resource
@@ -70,13 +176,16 @@ def get_ticker_info(ticker: str) -> dict:
 @st.cache_data(show_spinner=False, ttl=900)
 def get_history(ticker: str, period: str, interval: str):
     try:
-        hist = yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=False)
-        if isinstance(hist.columns, pd.MultiIndex):
-            hist.columns = [c[0] for c in hist.columns]
-        hist = hist.dropna(subset=["Close"])
-        return hist
+        return download_history_single(ticker, period, interval)
     except Exception:
         return pd.DataFrame()
+
+@st.cache_data(show_spinner=False, ttl=900)
+def get_histories_batch(tickers: list[str], period: str, interval: str):
+    try:
+        return download_history_batch(tickers, period, interval)
+    except Exception:
+        return {tk: pd.DataFrame() for tk in tickers}
 
 def is_etf(info: dict) -> bool:
     qt = (info.get("quoteType") or "").lower()
@@ -86,32 +195,34 @@ def is_etf(info: dict) -> bool:
 # --------------------------
 # Lógica de análisis
 # --------------------------
-def analizar_ticker(ticker: str, pe_thr: float, roe_thr: float, pb_thr: float, w_pe: float, w_roe: float, w_pb: float):
+def analizar_ticker(ticker: str, pe_thr: float, roe_thr: float, pb_thr: float,
+                    w_pe: float, w_roe: float, w_pb: float):
     t = get_ticker_obj(ticker)
     info = get_ticker_info(ticker)
 
-    def pick(*keys, default=None, scale=None):
+    def safe_pick(info_dict: dict, *keys, default=None, scale=None):
         for k in keys:
-            v = info.get(k)
+            v = info_dict.get(k)
             if v is not None and pd.notna(v):
                 return v * scale if (scale is not None and v is not None) else v
         return default
 
-    market_cap = pick("marketCap", "market_cap")
-    trailing_pe = pick("trailingPE", "trailing_pe")
-    forward_pe = pick("forwardPE", "forward_pe")
-    pb = pick("priceToBook", "price_to_book")
-    ev_ebitda = pick("enterpriseToEbitda", "ev_to_ebitda")
-    roe = pick("returnOnEquity", "return_on_equity", scale=1.0)
-    roa = pick("returnOnAssets", "return_on_assets", scale=1.0)
-    profit_margins = pick("profitMargins", "profit_margins", scale=1.0)
-    dividend_yield = pick("dividendYield", "dividend_yield", scale=1.0)
+    market_cap = safe_pick(info, "marketCap", "market_cap")
+    trailing_pe = safe_pick(info, "trailingPE", "trailing_pe")
+    forward_pe = safe_pick(info, "forwardPE", "forward_pe")
+    pb = safe_pick(info, "priceToBook", "price_to_book")
+    ev_ebitda = safe_pick(info, "enterpriseToEbitda", "ev_to_ebitda")
+    roe = safe_pick(info, "returnOnEquity", "return_on_equity", scale=1.0)
+    roa = safe_pick(info, "returnOnAssets", "return_on_assets", scale=1.0)
+    profit_margins = safe_pick(info, "profitMargins", "profit_margins", scale=1.0)
+    dividend_yield = safe_pick(info, "dividendYield", "dividend_yield", scale=1.0)
+    expense_ratio = safe_pick(info, "annualReportExpenseRatio", scale=1.0)  # ETFs
 
-    currency = pick("currency") or pick("financialCurrency") or "—"
-    exchange = pick("exchange") or "—"
-    sector = pick("sector") or "—"
-    industry = pick("industry") or "—"
-    long_name = pick("longName") or pick("shortName") or ticker
+    currency = safe_pick(info, "currency") or safe_pick(info, "financialCurrency") or "—"
+    exchange = safe_pick(info, "exchange") or "—"
+    sector = safe_pick(info, "sector") or "—"
+    industry = safe_pick(info, "industry") or "—"
+    long_name = safe_pick(info, "longName") or safe_pick(info, "shortName") or ticker
 
     data = {
         "Market Cap": [fmt_bil(market_cap)],
@@ -123,6 +234,7 @@ def analizar_ticker(ticker: str, pe_thr: float, roe_thr: float, pb_thr: float, w
         "ROA": [fmt_pct(roa)],
         "Profit Margins": [fmt_pct(profit_margins)],
         "Dividend Yield": [fmt_pct(dividend_yield)],
+        "Expense Ratio": [fmt_pct(expense_ratio)],
         "Moneda": [currency],
         "Exchange": [exchange],
         "Sector": [sector],
@@ -201,6 +313,9 @@ with st.sidebar:
     rsi_on = st.checkbox("Mostrar RSI (panel aparte)", value=False)
     log_scale = st.checkbox("Escala logarítmica", value=False)
 
+    st.subheader("Benchmark")
+    benchmark = st.selectbox("Benchmark para Beta", ["SPY", "QQQ", "EFA", "IWM"], index=0)
+
 # --------------------------
 # Tabs
 # --------------------------
@@ -209,13 +324,12 @@ tab1, tab2 = st.tabs(["🔍 Análisis individual", "🏁 Comparar Tickets"])
 with tab1:
     if ticker:
         # --- PASO 1: OBTENER DATOS FUNDAMENTALES Y DE HISTORIAL ---
-        df, decision, razones, meta, _t = analizar_ticker(ticker, pe_thr, roe_thr, pb_thr, w_pe, w_roe, w_pb)
+        df_fund, decision, razones, meta, _t = analizar_ticker(ticker, pe_thr, roe_thr, pb_thr, w_pe, w_roe, w_pb)
         hist = get_history(ticker, periodo, intervalo)
 
         st.subheader(f"🪪 {meta['long_name']} ({ticker})")
         
-        # --- PASO 2: CALCULAR TEMPRANAMENTE LAS MÉTRICAS TÉCNICAS Y DE RENDIMIENTO ---
-        # Inicializamos todas las variables que usaremos en las métricas para evitar errores
+        # --- PASO 2: CÁLCULOS PARA MÉTRICAS SUPERIORES ---
         period_performance = None
         last_close = None
         max_periodo = None
@@ -223,53 +337,85 @@ with tab1:
         last_volume = None
         avg_volume = None
         vol_delta = None
-        plot_df = pd.DataFrame() # DataFrame vacío por si 'hist' falla
+        plot_df = pd.DataFrame()
 
         if not hist.empty:
-            plot_df = hist.copy() # Usaremos plot_df consistentemente
-            
-            # Cálculo de rendimiento
-            period_performance = calculate_period_performance(plot_df) # Usando la función helper
-
-            # Cálculo de métricas técnicas para el panel superior
+            plot_df = hist.copy()
+            period_performance = calculate_period_performance(plot_df)
             last_close = plot_df["Close"].iloc[-1]
-            max_periodo = plot_df['High'].max()
-            min_periodo = plot_df['Low'].min()
-            last_volume = plot_df["Volume"].iloc[-1]
-            
-            # Calcular SMA de volumen para el delta
+            max_periodo = plot_df['High'].max() if 'High' in plot_df.columns else None
+            min_periodo = plot_df['Low'].min() if 'Low' in plot_df.columns else None
+            last_volume = plot_df["Volume"].iloc[-1] if 'Volume' in plot_df.columns else None
+
+            # Volumen SMA50
             vol_window = 50
-            if len(plot_df) >= vol_window:
+            if 'Volume' in plot_df.columns and len(plot_df) >= vol_window:
                 plot_df["Vol_SMA50"] = plot_df["Volume"].rolling(vol_window).mean()
                 avg_volume = plot_df["Vol_SMA50"].iloc[-1]
-                if pd.notna(avg_volume) and avg_volume > 0:
+                if pd.notna(avg_volume) and avg_volume > 0 and last_volume is not None:
                     vol_delta = (last_volume / avg_volume) - 1.0
 
-        # --- PASO 3: MOSTRAR EL PANEL DE MÉTRICAS COMBINADO ---
-        st.write("---") # Separador visual
-        
-        # Fila 1: Métricas Fundamentales
-        cols1 = st.columns(5)
-        cols1[0].metric("Resultado Fundamental", decision)
-        cols1[1].metric("Puntaje", f"{meta['score']*100:.0f} %")
-        cols1[2].metric(f"Cambio {periodo}",
-                       f"{period_performance:.2%}" if period_performance is not None else "—",
-                       delta=f"{period_performance:.2%}" if period_performance is not None else None)
-        cols1[3].metric("Moneda", meta["currency"])
-        cols1[4].metric("Exchange", meta["exchange"])
+            # --- PANEL DE MÉTRICAS COMBINADO (ORDENADO) ---
+            st.write("---")
 
-        # Fila 2: Métricas de Mercado y Técnicas
-        cols2 = st.columns(4)
-        cols2[0].metric("Precio Actual", f"{last_close:.2f}" if last_close is not None else "—")
-        cols2[1].metric("Máximo del Período", f"{max_periodo:.2f}" if max_periodo is not None else "—")
-        cols2[2].metric("Mínimo del Período", f"{min_periodo:.2f}" if min_periodo is not None else "—")
-        cols2[3].metric("Volumen Hoy", f"{fmt_bil(last_volume)}" if last_volume is not None else "—", 
-                      delta=f"{vol_delta:.1%}" if vol_delta is not None else None,
-                      help="Comparado con el promedio de 50 días.")
-        st.write("---")
+            # 1) Precio y variación
+            cols_price = st.columns(5)
+            cols_price[0].metric("Precio Actual", f"{last_close:.2f}" if last_close is not None else "—")
+            cols_price[1].metric(
+                f"Cambio {periodo}",
+                f"{period_performance:.2%}" if period_performance is not None else "—",
+                delta=f"{period_performance:.2%}" if period_performance is not None else None
+            )
+            cols_price[2].metric("Máximo del Período", f"{max_periodo:.2f}" if max_periodo is not None else "—")
+            cols_price[3].metric("Mínimo del Período", f"{min_periodo:.2f}" if min_periodo is not None else "—")
+            cols_price[4].metric(
+                "Volumen Hoy",
+                f"{fmt_bil(last_volume)}" if last_volume is not None else "—",
+                delta=f"{vol_delta:.1%}" if vol_delta is not None else None,
+                help="Comparado con el promedio de 50 días."
+            )
 
-        # --- El resto de la UI sigue como antes ---
-        if meta["is_etf"]:
+            # 2) Meta fundamental
+            cols_meta = st.columns(4)
+            cols_meta[0].metric("Resultado Fundamental", decision)
+            cols_meta[1].metric("Puntaje", f"{meta['score']*100:.0f} %")
+            cols_meta[2].metric("Market Cap", fmt_bil(get_ticker_info(ticker).get("marketCap")))
+            cols_meta[3].metric("Moneda/Exchange", f"{meta['currency']} · {meta['exchange']}")
+
+            st.write("---")
+
+            # 3) Métricas de riesgo (Sharpe→Calmar→DD→Ret→Vol)
+            if not plot_df.empty:
+                rm = risk_metrics(plot_df["Close"])
+                cols_rm = st.columns(5)
+                cols_rm[0].metric("Sharpe", fmt_num(rm.get("Sharpe")))
+                cols_rm[1].metric("Calmar", fmt_num(rm.get("Calmar")))
+                cols_rm[2].metric("Máx. DD", fmt_pct(rm.get("Máx. Drawdown")))
+                cols_rm[3].metric("Ret. Anual", fmt_pct(rm.get("Retorno Anualizado")))
+                cols_rm[4].metric("Vol. Anual", fmt_pct(rm.get("Volatilidad Anual")))
+
+            # 4) Sensibilidad al mercado (β, α, R²) – solo si hay benchmark válido
+            if not plot_df.empty and benchmark:
+                bench_hist = get_history(benchmark, periodo, intervalo)
+                if not bench_hist.empty:
+                    cols_mkt = st.columns(3)
+
+                    # β clásico (cov/var)
+                    beta = compute_beta(plot_df["Close"], bench_hist["Close"])
+                    cols_mkt[0].metric("β vs Benchmark", fmt_num(beta))
+
+                    # α y R² con regresión CAPM
+                    try:
+                        alpha, beta_ols, r2 = capm_alpha(plot_df["Close"], bench_hist["Close"])
+                        cols_mkt[1].metric("α (CAPM) diario", fmt_pct(alpha))
+                        cols_mkt[2].metric("R² (CAPM)", fmt_num(r2))
+                    except Exception:
+                        cols_mkt[1].metric("α (CAPM) diario", "—")
+                        cols_mkt[2].metric("R² (CAPM)", "—")
+
+
+        # Info ETF / rendimiento periodo
+        if meta["is_etf"] and meta.get("nota"):
             st.info(meta["nota"])
 
         if period_performance is not None:
@@ -281,7 +427,18 @@ with tab1:
                 st.info(f"➡️ El precio se mantiene sin cambios en el período {periodo}")
 
         st.subheader("📊 Ratios Fundamentales")
-        st.dataframe(df, use_container_width=True)
+
+        order_cols = [
+            "Market Cap", "Dividend Yield", "Expense Ratio",
+            "P/E Trailing", "P/E Forward", "P/B", "EV/EBITDA",
+            "ROE", "ROA", "Profit Margins",
+            "Moneda", "Exchange", "Sector", "Industria"
+        ]
+
+        # Reordenar columnas según orden lógico, ignorando las que no existan
+        df_fund = df_fund[[c for c in order_cols if c in df_fund.columns]]
+        st.dataframe(df_fund, use_container_width=True)
+
 
         st.subheader("📌 Evaluación Fundamental")
         st.write("**Explicación de métricas:**")
@@ -292,22 +449,18 @@ with tab1:
         if plot_df.empty:
             st.error("No hay datos históricos disponibles para los parámetros seleccionados.")
         else:
-            # Ahora el código del gráfico técnico funcionará sin problemas,
-            # pero ya no necesita mostrar las métricas al final porque ya están arriba.
-            
-            # --- CÁLCULO DE INDICADORES (SMA de precio, etc.) ---
+            # SMA precio
             short_window, long_window = 50, 200
             if sma50_on and len(plot_df) >= short_window:
                 plot_df["SMA50"] = plot_df["Close"].rolling(short_window).mean()
             if sma200_on and len(plot_df) >= long_window:
                 plot_df["SMA200"] = plot_df["Close"].rolling(long_window).mean()
 
-            # --- DETECCIÓN DE SEÑALES Y LÍNEA DE TENDENCIA ---
-            # (Todo este bloque de código se mantiene exactamente igual que antes)
+            # Cruces
             last_signal = None
             golden_crosses = []
             death_crosses = []
-            if "SMA50" in plot_df and "SMA200" in plot_df:
+            if "SMA50" in plot_df.columns and "SMA200" in plot_df.columns:
                 prev_sma50 = plot_df["SMA50"].shift(1)
                 prev_sma200 = plot_df["SMA200"].shift(1)
                 gc_mask = (plot_df["SMA50"] > plot_df["SMA200"]) & (prev_sma50 <= prev_sma200)
@@ -319,9 +472,10 @@ with tab1:
                     last_signal = ("golden", f"✨ Golden Cross detectado el {last_gc_date}")
                 if death_crosses:
                     last_dc_date = death_crosses[-1].strftime('%Y-%m-%d')
-                    if last_signal is None or death_crosses[-1] > golden_crosses[-1]:
+                    if last_signal is None or (death_crosses and golden_crosses and death_crosses[-1] > golden_crosses[-1]):
                         last_signal = ("death", f"💀 Death Cross detectado el {last_dc_date}")
-            
+
+            # Línea de tendencia simple
             try:
                 from scipy.signal import find_peaks
                 peaks, _ = find_peaks(-plot_df["Close"], distance=10)
@@ -333,34 +487,40 @@ with tab1:
             except Exception as e:
                 st.caption(f"No se pudo generar la línea de tendencia: {e}")
 
-            # --- CREACIÓN DEL GRÁFICO (sin cambios) ---
-            fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
-                               vertical_spacing=0.05, row_heights=[0.75, 0.25])
+            # Gráfico principal
+            fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                                vertical_spacing=0.05, row_heights=[0.75, 0.25])
             fig.add_trace(go.Candlestick(x=plot_df.index, open=plot_df['Open'], high=plot_df['High'],
-                                       low=plot_df['Low'], close=plot_df['Close'], name='Precio'), row=1, col=1)
+                                         low=plot_df['Low'], close=plot_df['Close'], name='Precio'), row=1, col=1)
             for col in ["SMA50", "SMA200", "Trendline"]:
-                if col in plot_df:
+                if col in plot_df.columns:
                     fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df[col], name=col,
                                              line=dict(width=2)), row=1, col=1)
-            if golden_crosses:
-                fig.add_trace(go.Scatter(x=golden_crosses, y=plot_df.loc[golden_crosses]["SMA50"], name='Golden Cross', mode='markers',
-                                         marker=dict(color='gold', size=12, symbol='star')), row=1, col=1)
-            if death_crosses:
-                fig.add_trace(go.Scatter(x=death_crosses, y=plot_df.loc[death_crosses]["SMA50"], name='Death Cross', mode='markers',
-                                         marker=dict(color='red', size=10, symbol='x')), row=1, col=1)
-            fig.add_trace(go.Bar(x=plot_df.index, y=plot_df['Volume'], name='Volumen',
-                                 marker_color='lightgrey'), row=2, col=1)
-            if "Vol_SMA50" in plot_df:
+            if golden_crosses and "SMA50" in plot_df.columns:
+                fig.add_trace(go.Scatter(x=golden_crosses, y=plot_df.loc[golden_crosses]["SMA50"], name='Golden Cross',
+                                         mode='markers', marker=dict(color='gold', size=12, symbol='star')), row=1, col=1)
+            if death_crosses and "SMA50" in plot_df.columns:
+                fig.add_trace(go.Scatter(x=death_crosses, y=plot_df.loc[death_crosses]["SMA50"], name='Death Cross',
+                                         mode='markers', marker=dict(color='red', size=10, symbol='x')), row=1, col=1)
+
+            if 'Volume' in plot_df.columns:
+                fig.add_trace(go.Bar(x=plot_df.index, y=plot_df['Volume'], name='Volumen',
+                                     marker_color='lightgrey'), row=2, col=1)
+            if "Vol_SMA50" in plot_df.columns:
                 fig.add_trace(go.Scatter(x=plot_df.index, y=plot_df["Vol_SMA50"], name='Volumen SMA(50)',
                                          line=dict(width=1, color='slategray')), row=2, col=1)
 
-            fig.update_layout(title=f"Análisis Técnico - {ticker} | Cambio {periodo}: {f'{period_performance:.2%}' if period_performance is not None else ''}",
-                              xaxis_rangeslider_visible=False, height=600, legend_title="Series")
+            fig.update_layout(
+                title=f"Análisis Técnico - {ticker} | Cambio {periodo}: {f'{period_performance:.2%}' if period_performance is not None else ''}",
+                xaxis_rangeslider_visible=False, height=600, legend_title="Series"
+            )
+            # Ocultar fines de semana/feriados y spikes
+            fig.update_xaxes(rangebreaks=[dict(bounds=["sat", "mon"])], showspikes=True, spikemode="across")
             fig.update_yaxes(title_text=f"Precio ({meta['currency']})", row=1, col=1, type="log" if log_scale else "linear")
             fig.update_yaxes(title_text="Volumen", row=2, col=1)
             st.plotly_chart(fig, use_container_width=True)
 
-            # --- SEÑALES DE CRUCE (sin el bloque de métricas que ya movimos) ---
+            # Señales
             if last_signal:
                 if last_signal[0] == "golden":
                     st.success(last_signal[1])
@@ -368,15 +528,13 @@ with tab1:
                     st.error(last_signal[1])
             elif sma50_on and sma200_on:
                 st.info("No se han detectado cruces de medias móviles (50/200) en el período seleccionado.")
-            
-            # --- CÁLCULO Y GRÁFICO DE RSI (sin cambios) ---
+
+            # RSI opcional (Wilder)
             if rsi_on and len(plot_df) > 14:
                 close = plot_df["Close"]
                 delta = close.diff()
-                up = delta.clip(lower=0.0)
-                down = -1 * delta.clip(upper=0.0)
-                roll_up = up.ewm(com=13, adjust=False).mean()
-                roll_down = down.ewm(com=13, adjust=False).mean()
+                roll_up = delta.clip(lower=0).ewm(alpha=1/14, adjust=False).mean()
+                roll_down = (-delta.clip(upper=0)).ewm(alpha=1/14, adjust=False).mean()
                 rs = roll_up / roll_down
                 rsi = 100 - (100 / (1 + rs))
                 rsi_df = pd.DataFrame({"RSI": rsi}).dropna()
@@ -396,75 +554,143 @@ with tab2:
         "Modo de Análisis",
         ("Contexto Sectorial (Recomendado)", "Umbrales Absolutos (Original)"),
         horizontal=True,
-        help="Elige cómo evaluar los tickers. El contexto sectorial los compara con sus pares, mientras que los umbrales absolutos usan los valores fijos de la barra lateral."
+        help="El comparador sectorial los contrasta con sus pares; el modo absoluto usa los umbrales de la barra lateral."
     )
-    st.caption("El comparador siempre utiliza los pesos, período e intervalo definidos en la barra lateral.")
+    st.caption("El comparador usa los pesos, período e intervalo definidos en la barra lateral.")
 
+    # --- Limpieza y validación de tickers ---
     if not tickers_input:
         st.info("Ingresa al menos un ticker para comenzar el análisis.")
     else:
-        tickers = [t.strip().upper() for t in tickers_input.split(",") if t.strip()]
+        # normalizamos: upper, strip, únicos, sin vacíos
+        tickers = []
+        for t in tickers_input.split(","):
+            t = t.strip().upper()
+            if t and t not in tickers:
+                tickers.append(t)
+
         if len(tickers) == 0:
             st.warning("La lista de tickers está vacía.")
         else:
-            # --- LÓGICA DE ANÁLISIS ABSOLUTO (MÉTODO ORIGINAL) ---
+            # --- Controles extra de la vista Comparador ---
+            colc1, colc2, colc3 = st.columns([1,1,1])
+            with colc1:
+                sort_metric = st.selectbox(
+                    "Ordenar por",
+                    ["Puntaje", f"Perf ({periodo})", "Volatilidad (Anual)", "Market Cap", "ROE", "P/E Trailing", "P/B"],
+                    index=0
+                )
+            with colc2:
+                asc = st.toggle("Ascendente", value=False, help="Desactiva para ver los mejores arriba")
+            with colc3:
+                mcap_min = st.number_input("Market Cap mínimo (USD, millones)", min_value=0, value=0, step=100)
+                mcap_min = mcap_min * 1_000_000  # a USD
+
+            # ============================
+            # MODO: UMBRALES ABSOLUTOS
+            # ============================
             if analysis_mode == "Umbrales Absolutos (Original)":
                 progress = st.progress(0.0, text="Analizando con umbrales absolutos…")
                 rows = []
+                failed = []
+
                 for i, tk in enumerate(tickers, start=1):
                     try:
-                        # Reutilizamos la función de análisis original
                         df_i, decision_i, _, meta_i, _ = analizar_ticker(
                             tk, pe_thr, roe_thr, pb_thr, w_pe, w_roe, w_pb
                         )
                         hist_i = get_history(tk, periodo, intervalo)
-                        perf = calculate_period_performance(hist_i) # Usando la función helper que sugerí
-                        
+                        perf = calculate_period_performance(hist_i)
                         volatilidad = None
                         if not hist_i.empty:
                             retornos = hist_i['Close'].pct_change()
-                            volatilidad = retornos.std() * np.sqrt(252)
+                            volatilidad = retornos.std(ddof=0) * np.sqrt(252)
+
+                        # market cap crudo para filtro/sort
+                        try:
+                            raw_mcap = get_ticker_info(tk).get("marketCap")
+                        except Exception:
+                            raw_mcap = None
 
                         rows.append({
                             "Ticker": tk,
                             "Nombre": meta_i["long_name"],
                             "Resultado": decision_i,
                             "Puntaje": round(meta_i["score"] * 100, 1),
-                            "P/E Trailing": df_i["P/E Trailing"].iloc[0],
-                            "ROE": df_i["ROE"].iloc[0],
-                            "P/B": df_i["P/B"].iloc[0],
-                            "Market Cap": df_i["Market Cap"].iloc[0],
+                            "P/E Trailing": df_i.get("P/E Trailing", ["—"])[0] if isinstance(df_i.get("P/E Trailing"), pd.Series) else df_i.get("P/E Trailing", ["—"])[0] if "P/E Trailing" in df_i else "—",
+                            "ROE": df_i.get("ROE", ["—"])[0] if "ROE" in df_i else "—",
+                            "P/B": df_i.get("P/B", ["—"])[0] if "P/B" in df_i else "—",
+                            "Market Cap": df_i.get("Market Cap", ["—"])[0] if "Market Cap" in df_i else "—",
+                            "_MarketCapRaw": raw_mcap,
                             "Sector": meta_i["sector"],
                             f"Perf ({periodo})": fmt_pct(perf, 2),
                             "Volatilidad (Anual)": fmt_pct(volatilidad, 2),
                         })
                     except Exception as e:
                         st.toast(f"Error analizando {tk}: {e}", icon="⚠️")
-                        rows.append({"Ticker": tk, "Nombre": "Error", "Puntaje": 0})
+                        failed.append(tk)
                     finally:
                         progress.progress(i / len(tickers), text=f"Analizando {tk} ({i}/{len(tickers)})")
-                
+
                 progress.empty()
+
+                if failed:
+                    st.warning(f"No se pudieron analizar: {', '.join(failed)}")
+
                 if rows:
-                    rank_df_sorted = pd.DataFrame(rows).sort_values(by="Puntaje", ascending=False, ignore_index=True)
+                    rank_df = pd.DataFrame(rows)
+
+                    # Filtro por Market Cap mínimo (usa crudo)
+                    if mcap_min > 0 and "_MarketCapRaw" in rank_df:
+                        rank_df = rank_df[(rank_df["_MarketCapRaw"].fillna(0) >= mcap_min)]
+
+                    # Orden dinámico
+                    sort_key = sort_metric
+                    if sort_metric in [f"Perf ({periodo})", "Volatilidad (Anual)"]:
+                        # convertir a float si vienen como strings "12.34%"
+                        def to_float_pct(x):
+                            if isinstance(x, str) and x.endswith("%"):
+                                try: return float(x.replace("%",""))/100.0
+                                except: return np.nan
+                            return x
+                        rank_df["_sortcol"] = rank_df[sort_metric].apply(to_float_pct)
+                        sort_key = "_sortcol"
+                    elif sort_metric == "Market Cap":
+                        # usar crudo si existe
+                        sort_key = "_MarketCapRaw" if "_MarketCapRaw" in rank_df.columns else "Market Cap"
+
+                    rank_df_sorted = rank_df.sort_values(by=sort_key, ascending=asc, ignore_index=True).drop(columns=["_sortcol"], errors="ignore")
+
                     st.subheader("🏆 Ranking (Umbrales Absolutos)")
-                    st.dataframe(rank_df_sorted, use_container_width=True)
-                    # Aquí puedes añadir los gráficos y filtros que ya tenías
-            
-            # --- LÓGICA DE ANÁLISIS SECTORIAL (NUEVO MÉTODO) ---
+                    st.dataframe(rank_df_sorted.drop(columns=["_MarketCapRaw"], errors="ignore"), use_container_width=True)
+
+                    # Export CSV
+                    st.download_button(
+                        "⬇️ Descargar ranking (CSV)",
+                        data=rank_df_sorted.drop(columns=["_MarketCapRaw"], errors="ignore").to_csv(index=False).encode("utf-8"),
+                        file_name="ranking_absoluto.csv",
+                        mime="text/csv"
+                    )
+
+            # ============================
+            # MODO: CONTEXTO SECTORIAL
+            # ============================
             elif analysis_mode == "Contexto Sectorial (Recomendado)":
-                # FASE 1: Recopilar todos los datos numéricos primero
-                progress = st.progress(0.0, text="Fase 1/2: Recopilando datos...")
+                # FASE 1: datos en batch
+                progress = st.progress(0.0, text="Fase 1/2: Descargando históricos en batch…")
+                hist_map = get_histories_batch(tickers, periodo, intervalo)
+
                 all_data = []
+                failed = []
                 for i, tk in enumerate(tickers, start=1):
                     try:
                         info = get_ticker_info(tk)
-                        hist = get_history(tk, periodo, intervalo)
-                        
+                        hist = hist_map.get(tk, pd.DataFrame())
+
                         perf = calculate_period_performance(hist)
                         volatilidad = None
                         if not hist.empty:
-                            volatilidad = hist['Close'].pct_change().std() * np.sqrt(252)
+                            volatilidad = hist['Close'].pct_change().std(ddof=0) * np.sqrt(252)
 
                         all_data.append({
                             "Ticker": tk,
@@ -474,100 +700,172 @@ with tab2:
                             "ROE": info.get("returnOnEquity"),
                             "P/B": info.get("priceToBook"),
                             "Market Cap": info.get("marketCap"),
+                            "_MarketCapRaw": info.get("marketCap"),
                             f"Perf ({periodo})": perf,
                             "Volatilidad (Anual)": volatilidad,
                         })
                     except Exception as e:
                         st.toast(f"No se pudieron obtener datos para {tk}: {e}", icon="⚠️")
-                        all_data.append({"Ticker": tk, "Sector": "Error"})
+                        failed.append(tk)
                     finally:
-                        progress.progress(i / len(tickers), text=f"Fase 1/2: Recopilando {tk}")
-                
+                        progress.progress(i / len(tickers), text=f"Fase 1/2: Procesando {tk}")
+
+                progress.empty()
+                if failed:
+                    st.warning(f"No se pudieron analizar: {', '.join(failed)}")
+
                 master_df = pd.DataFrame(all_data).dropna(subset=['Sector']).reset_index(drop=True)
                 master_df = master_df[master_df["Sector"] != "Error"]
 
-                if not master_df.empty:
-                    # FASE 2: Calcular promedios sectoriales y re-evaluar
-                    progress.progress(1.0, text="Fase 2/2: Analizando contexto sectorial...")
-                    
-                    metrics_to_average = ["P/E Trailing", "ROE", "P/B"]
-                    for metric in metrics_to_average:
-                        # Usamos transform para crear una nueva columna con el promedio del sector de cada fila
-                        master_df[f"{metric} (Prom. Sector)"] = master_df.groupby('Sector')[metric].transform('mean')
+                # Filtros previos
+                if mcap_min > 0 and "_MarketCapRaw" in master_df.columns:
+                    master_df = master_df[(master_df["_MarketCapRaw"].fillna(0) >= mcap_min)]
 
+                if not master_df.empty:
+                    # Selector de sectores (opcional)
+                    sectores = sorted([s for s in master_df["Sector"].dropna().unique() if s])
+                    sel_sectores = st.multiselect("Filtrar sectores", options=sectores, default=sectores)
+                    master_df = master_df[master_df["Sector"].isin(sel_sectores)] if sel_sectores else master_df
+
+                    # FASE 2: promedios sectoriales robustos (mediana + winsor)
+                    progress = st.progress(1.0, text="Fase 2/2: Analizando contexto sectorial…")
+                    metrics_to_average = ["P/E Trailing", "ROE", "P/B"]
+
+                    def robust_sector_stat(x: pd.Series):
+                        x_w = winsorize_series(x.dropna())
+                        return x_w.median()
+
+                    for metric in metrics_to_average:
+                        master_df[f"{metric} (Prom. Sector)"] = (
+                            master_df.groupby('Sector')[metric]
+                            .transform(robust_sector_stat)
+                        )
+
+                    # Reevaluación con comparación a mediana de sector
                     def reevaluar_con_contexto(row):
-                        scores, razones = [], []
-                        
-                        # P/E vs Promedio del Sector
-                        pe, pe_avg = row["P/E Trailing"], row["P/E Trailing (Prom. Sector)"]
+                        scores = []
+                        # P/E < sector (mejor más bajo)
+                        pe, pe_avg = row.get("P/E Trailing"), row.get("P/E Trailing (Prom. Sector)")
                         if pd.notna(pe) and pd.notna(pe_avg) and pe_avg > 0:
-                            cond = pe < pe_avg
-                            scores.append(w_pe if cond else 0)
-                        
-                        # ROE vs Promedio del Sector
-                        roe, roe_avg = row["ROE"], row["ROE (Prom. Sector)"]
+                            scores.append(w_pe if pe < pe_avg else 0)
+                            row["P/E vs Sector (%)"] = (pe / pe_avg - 1.0) if pe_avg else np.nan
+                        else:
+                            row["P/E vs Sector (%)"] = np.nan
+
+                        # ROE > sector (mejor más alto)
+                        roe, roe_avg = row.get("ROE"), row.get("ROE (Prom. Sector)")
                         if pd.notna(roe) and pd.notna(roe_avg):
-                            cond = roe > roe_avg
-                            scores.append(w_roe if cond else 0)
-                        
-                        # P/B vs Promedio del Sector
-                        pb, pb_avg = row["P/B"], row["P/B (Prom. Sector)"]
+                            scores.append(w_roe if roe > roe_avg else 0)
+                            row["ROE vs Sector (pp)"] = (roe - roe_avg) if pd.notna(roe_avg) else np.nan
+                        else:
+                            row["ROE vs Sector (pp)"] = np.nan
+
+                        # P/B < sector
+                        pb, pb_avg = row.get("P/B"), row.get("P/B (Prom. Sector)")
                         if pd.notna(pb) and pd.notna(pb_avg) and pb_avg > 0:
-                            cond = pb < pb_avg
-                            scores.append(w_pb if cond else 0)
-                        
+                            scores.append(w_pb if pb < pb_avg else 0)
+                            row["P/B vs Sector (%)"] = (pb / pb_avg - 1.0) if pb_avg else np.nan
+                        else:
+                            row["P/B vs Sector (%)"] = np.nan
+
                         total_w = w_pe + w_roe + w_pb
                         score = (sum(scores) / total_w) if total_w > 0 else 0
-                        
                         decision = "✅ Atractivo vs Pares" if score >= 0.67 else ("🟡 Neutro vs Pares" if score >= 0.33 else "❌ Caro vs Pares")
-                        
                         row["Puntaje"] = round(score * 100, 1)
                         row["Resultado"] = decision
                         return row
 
                     final_df = master_df.apply(reevaluar_con_contexto, axis=1)
                     progress.empty()
-                    
-                    # Formatear y mostrar tabla final
+
+                    # Formateo visual
+                    df_display = final_df.copy()
+                    df_display[f"Perf ({periodo})"] = df_display[f"Perf ({periodo})"].apply(fmt_pct)
+                    for c in ["P/E Trailing", "P/E Trailing (Prom. Sector)", "P/B", "P/B (Prom. Sector)"]:
+                        if c in df_display.columns: df_display[c] = df_display[c].apply(fmt_num)
+                    for c in ["ROE", "ROE (Prom. Sector)"]:
+                        if c in df_display.columns: df_display[c] = df_display[c].apply(fmt_pct)
+                    if "Market Cap" in df_display.columns:
+                        df_display["Market Cap"] = df_display["Market Cap"].apply(fmt_bil)
+                    # deltas relativos
+                    for c in ["P/E vs Sector (%)", "P/B vs Sector (%)"]:
+                        if c in df_display.columns: df_display[c] = df_display[c].apply(fmt_pct)
+                    if "ROE vs Sector (pp)" in df_display.columns:
+                        df_display["ROE vs Sector (pp)"] = df_display["ROE vs Sector (pp)"].apply(lambda x: f"{x*100:.2f} pp" if pd.notna(x) else "—")
+                    if "Volatilidad (Anual)" in df_display.columns:
+                        df_display["Volatilidad (Anual)"] = df_display["Volatilidad (Anual)"].apply(fmt_pct)
+
                     st.subheader("🏆 Ranking Relativo al Sector")
-                    
-                    df_display = final_df.sort_values("Puntaje", ascending=False, ignore_index=True)
-                    
-                    # Formateo para visualización
-                    format_mapping = {
-                        "P/E Trailing": fmt_num, "P/E Trailing (Prom. Sector)": fmt_num,
-                        "ROE": fmt_pct, "ROE (Prom. Sector)": fmt_pct,
-                        "P/B": fmt_num, "P/B (Prom. Sector)": fmt_num,
-                        "Market Cap": fmt_bil,
-                        f"Perf ({periodo})": fmt_pct, "Volatilidad (Anual)": fmt_pct,
-                    }
-                    for col, func in format_mapping.items():
-                        if col in df_display:
-                            df_display[col] = df_display[col].apply(func)
-                    
                     cols_to_show = [
-                        "Ticker", "Nombre", "Resultado", "Puntaje", "Sector", 
-                        "P/E Trailing", "P/E Trailing (Prom. Sector)",
-                        "ROE", "ROE (Prom. Sector)", "P/B", "P/B (Prom. Sector)",
+                        "Ticker", "Nombre", "Resultado", "Puntaje", "Sector",
+                        "P/E Trailing", "P/E Trailing (Prom. Sector)", "P/E vs Sector (%)",
+                        "ROE", "ROE (Prom. Sector)", "ROE vs Sector (pp)",
+                        "P/B", "P/B (Prom. Sector)", "P/B vs Sector (%)",
                         "Market Cap", f"Perf ({periodo})", "Volatilidad (Anual)"
                     ]
-                    st.dataframe(df_display[[c for c in cols_to_show if c in df_display.columns]], use_container_width=True)
+                    cols_to_show = [c for c in cols_to_show if c in df_display.columns]
+                    # Orden dinámico
+                    sort_key = sort_metric if sort_metric in df_display.columns else "Puntaje"
+                    tmp_sort = df_display.copy()
+                    if sort_key in [f"Perf ({periodo})", "Volatilidad (Anual)", "P/E vs Sector (%)", "P/B vs Sector (%)"]:
+                        # crear columna numérica temporal para ordenar
+                        def to_float_pct(x):
+                            if isinstance(x, str) and x.endswith("%"):
+                                try: return float(x.replace("%",""))/100.0
+                                except: return np.nan
+                            return x
+                        tmp_sort["_sortcol"] = tmp_sort[sort_key].apply(to_float_pct)
+                        sort_key = "_sortcol"
 
-                    # --- Gráfico de Ranking (similar al que ya tenías) ---
-                    if len(df_display) > 1:
-                        top_n = st.slider(
-                            "Mostrar Top N en gráfico", 1, min(20, len(df_display)), min(10, len(df_display))
-                        )
-                        plot_df = df_display.head(top_n)
+                    df_sorted = tmp_sort.sort_values(by=sort_key, ascending=asc, ignore_index=True).drop(columns=["_sortcol"], errors="ignore")
+                    st.dataframe(df_sorted[cols_to_show], use_container_width=True)
+
+                    # Export CSV
+                    st.download_button(
+                        "⬇️ Descargar ranking (CSV)",
+                        data=df_sorted[cols_to_show].to_csv(index=False).encode("utf-8"),
+                        file_name="ranking_sectorial.csv",
+                        mime="text/csv"
+                    )
+
+                    # Gráfico de ranking (Top N)
+                    if len(df_sorted) > 1:
+                        top_n = st.slider("Mostrar Top N en gráfico", 1, min(20, len(df_sorted)), min(10, len(df_sorted)))
+                        plot_rank = df_sorted.head(top_n)
                         fig_rank = px.bar(
-                            plot_df, x="Ticker", y="Puntaje", color="Sector",
+                            plot_rank, x="Ticker", y="Puntaje", color="Sector",
                             title=f"Puntaje por Ticker (Top {top_n})",
                             hover_data=["Nombre", "Resultado", "P/E Trailing", "ROE", "P/B"]
                         )
                         st.plotly_chart(fig_rank, use_container_width=True)
+
+                    # Scatter ROE vs P/B (tamaño=Market Cap)
+                    if all(col in df_sorted.columns for col in ["ROE", "P/B", "Ticker"]):
+                        # Convertir ROE/PB a valores numéricos para el scatter
+                        def to_float_safe(v):
+                            if isinstance(v, str) and v.endswith("%"):
+                                try: return float(v.replace("%",""))/100.0
+                                except: return np.nan
+                            try: return float(v)
+                            except: return np.nan
+
+                        sc = df_sorted.copy()
+                        sc["ROE_num"] = sc["ROE"].apply(to_float_safe)
+                        sc["PB_num"] = sc["P/B"].apply(to_float_safe)
+                        sc["MC_num"] = sc["_MarketCapRaw"] if "_MarketCapRaw" in sc.columns else np.nan
+
+                        sc = sc.dropna(subset=["ROE_num", "PB_num"])
+                        if not sc.empty:
+                            fig_scatter = px.scatter(
+                                sc, x="PB_num", y="ROE_num", color="Sector", size="MC_num",
+                                hover_name="Ticker",
+                                labels={"PB_num": "P/B", "ROE_num": "ROE"},
+                                title="Mapa ROE vs P/B (tamaño = Market Cap)"
+                            )
+                            st.plotly_chart(fig_scatter, use_container_width=True)
                 else:
-                    progress.empty()
                     st.error("No se pudo obtener información válida para ninguno de los tickers ingresados.")
+
 # Footer
 st.caption(
     "Aviso: los datos provienen de Yahoo Finance vía yfinance. Algunos ratios pueden no estar disponibles o variar según el tipo de activo (acción vs ETF). "
