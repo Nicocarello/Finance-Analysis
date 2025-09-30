@@ -267,21 +267,22 @@ with tab1:
                 col2.metric("Mínimo del Período", f"{min_price:.2f} {meta['currency']}")
                 col3.metric("Máximo del Período", f"{max_price:.2f} {meta['currency']}")
 
-            if rsi_on:
+            # Dentro de la sección if rsi_on:
+            if rsi_on and len(plot_df) > 14:
                 close = plot_df["Close"]
                 delta = close.diff()
                 up = delta.clip(lower=0.0)
                 down = -1 * delta.clip(upper=0.0)
-                roll = 14
-                roll_up = up.rolling(roll).mean()
-                roll_down = down.rolling(roll).mean()
+
+                # Usar ewm() para Media Móvil Exponencial
+                roll_up = up.ewm(com=13, adjust=False).mean() # com = alpha-1, para un período de 14, com=13
+                roll_down = down.ewm(com=13, adjust=False).mean()
+
                 rs = roll_up / roll_down
                 rsi = 100 - (100 / (1 + rs))
+
                 rsi_df = pd.DataFrame({"RSI": rsi}).dropna()
-                fig_rsi = px.line(rsi_df, x=rsi_df.index, y="RSI", title=f"RSI (14) - {ticker}")
-                fig_rsi.update_layout(xaxis_title="Fecha", yaxis_title="RSI")
-                fig_rsi.add_hrect(y0=30, y1=70, line_width=0, fillcolor="LightGray", opacity=0.15)
-                st.plotly_chart(fig_rsi, use_container_width=True)
+                # ... el resto del código del gráfico RSI es perfecto
 
 with tab2:
     st.header("📊 Comparador de Tickers (ranking por puntaje)")
@@ -311,6 +312,12 @@ with tab2:
                         if first_close > 0:
                             perf = (last_close / first_close) - 1.0
 
+                    volatilidad = None
+                    if not hist_i.empty and "Close" in hist_i:
+                        retornos_diarios = hist_i['Close'].pct_change()
+                        # Anualizar la volatilidad (si el intervalo es diario)
+                        volatilidad = retornos_diarios.std() * np.sqrt(252) 
+
                     rows.append({
                         "Ticker": tk,
                         "Nombre": meta_i["long_name"],
@@ -325,6 +332,8 @@ with tab2:
                         "Sector": meta_i["sector"],
                         "Industria": meta_i["industry"],
                         f"Perf ({periodo})": f"{perf:.2%}" if perf is not None else "—",
+                        "Volatilidad (Anual)": f"{volatilidad:.2%}" if volatilidad is not None else "—",
+
                     })
                 except Exception:
                     rows.append({
