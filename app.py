@@ -8,6 +8,16 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import statsmodels.api as sm
+# --- IA y Noticias ---
+import google.generativeai as genai
+import feedparser
+from datetime import datetime, timedelta
+import requests
+
+# Configuración de la API de Gemini (usa tu clave)
+# Si usás Streamlit Cloud, podés guardarla en st.secrets["GEMINI_API_KEY"]
+genai.configure(api_key=st.secrets.get("GEMINI_API_KEY", "TU_API_KEY_AQUI"))
+
 
 
 # --------------------------
@@ -192,6 +202,65 @@ def is_etf(info: dict) -> bool:
     name = (info.get("shortName") or info.get("longName") or "").lower()
     return "etf" in qt or "etf" in name
 
+
+# --------------------------
+# Noticias recientes y análisis con IA
+# --------------------------
+
+def fetch_recent_news(query: str, days: int = 7, max_items: int = 5):
+    """
+    Busca noticias recientes sobre la empresa/ticker usando Google News RSS.
+    No requiere API Key.
+    """
+    end_date = datetime.now()
+    start_date = end_date - timedelta(days=days)
+    feed_url = (
+        f"https://news.google.com/rss/search?q={query}+stock+finance+after:{start_date.strftime('%Y-%m-%d')}"
+        f"&hl=en-US&gl=US&ceid=US:en"
+    )
+    feed = feedparser.parse(feed_url)
+    items = []
+    for entry in feed.entries[:max_items]:
+        items.append({
+            "title": entry.title,
+            "link": entry.link,
+            "published": getattr(entry, "published", ""),
+            "summary": getattr(entry, "summary", "")
+        })
+    return items
+
+
+def analyze_news_with_gemini(ticker: str, news_list: list[dict]) -> str:
+    """
+    Usa Gemini para resumir y analizar las noticias de la empresa/ticker.
+    Retorna un resumen con sentimiento (Positivo / Negativo / Neutro).
+    """
+    if not news_list:
+        return "⚪ No se encontraron noticias recientes para analizar."
+
+    content = "\n".join([f"- {n['title']}: {n['summary']}" for n in news_list])
+
+    prompt = f"""
+    Eres un analista financiero experto. Se te proporciona un resumen de las últimas noticias
+    sobre la acción {ticker}. Analiza si el sentimiento general sugiere que el precio de la acción
+    podría subir, bajar o mantenerse estable en el corto plazo.
+    Da una respuesta breve en español con este formato:
+
+    Sentimiento general: [Positivo / Negativo / Neutro]
+    Justificación: [breve explicación clara y directa basada en las noticias]
+    
+    Noticias:
+    {content}
+    """
+
+    try:
+        model = genai.GenerativeModel("gemini-2.0-flash")
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception as e:
+        return f"⚠️ Error al generar análisis con Gemini: {e}"
+
+
 # --------------------------
 # Lógica de análisis
 # --------------------------
@@ -297,24 +366,28 @@ with st.sidebar:
 
     st.subheader("Umbrales")
     pe_thr = st.number_input("Umbral P/E (trailing) máximo", min_value=1.0, max_value=100.0, value=15.0, step=0.5)
-    roe_thr = st.number_input("Umbral ROE mínimo", min_value=0.0, max_value=1.0, value=0.15, step=0.01, help="En fracción (0.15 = 15%)")
+    roe_thr = st.number_input("Umbral ROE mínimo", min_value=0.0, max_value=1.0, value=0.15, step=0.01)
     pb_thr = st.number_input("Umbral P/B máximo", min_value=0.1, max_value=20.0, value=2.0, step=0.1)
 
-    st.subheader("Pesos (importancia)")
+    st.subheader("Pesos")
     w_pe = st.slider("Peso P/E", 0.0, 1.0, 0.34)
     w_roe = st.slider("Peso ROE", 0.0, 1.0, 0.33)
     w_pb = st.slider("Peso P/B", 0.0, 1.0, 0.33)
 
     st.subheader("Serie de precios")
-    periodo = st.selectbox("Período", ["1mo", "3mo", "6mo", "1y", "2y", "5y", "10y", "ytd", "max"], index=2)
-    intervalo = st.selectbox("Intervalo", ["1d", "5d", "1wk", "1mo", "3mo"], index=0)
+    periodo = st.selectbox("Período", ["1mo","3mo","6mo","1y","2y","5y","10y","ytd","max"], index=2)
+    intervalo = st.selectbox("Intervalo", ["1d","5d","1wk","1mo","3mo"], index=0)
     sma50_on = st.checkbox("Mostrar SMA 50", value=True)
     sma200_on = st.checkbox("Mostrar SMA 200", value=False)
-    rsi_on = st.checkbox("Mostrar RSI (panel aparte)", value=False)
+    rsi_on = st.checkbox("Mostrar RSI", value=False)
     log_scale = st.checkbox("Escala logarítmica", value=False)
 
     st.subheader("Benchmark")
     benchmark = st.selectbox("Benchmark para Beta", ["SPY", "QQQ", "EFA", "IWM"], index=0)
+
+    st.subheader("Análisis con IA")
+    ai_enabled = st.checkbox("Activar análisis con Gemini", value=True,
+                             help="Obtiene y analiza noticias recientes con IA para predecir tendencia.")
 
 # --------------------------
 # Tabs
@@ -544,6 +617,24 @@ with tab1:
                     fig_rsi.add_hrect(y0=70, y1=100, line_width=0, fillcolor="red", opacity=0.1)
                     fig_rsi.add_hrect(y0=0, y1=30, line_width=0, fillcolor="green", opacity=0.1)
                     st.plotly_chart(fig_rsi, use_container_width=True)
+        if ai_enabled:
+            st.write("---")
+            st.subheader("🧠 Análisis AI de Noticias Recientes")
+
+            with st.spinner(f"Buscando y analizando noticias de los últimos 7 días sobre {ticker}..."):
+                query_name = meta.get("long_name") or ticker
+                news = fetch_recent_news(query_name)
+                ai_summary = analyze_news_with_gemini(ticker, news)
+
+            if news:
+                with st.expander("🗞️ Ver noticias recientes"):
+                    for n in news:
+                        st.markdown(f"- [{n['title']}]({n['link']})  \n<sub>{n['published']}</sub>", unsafe_allow_html=True)
+            else:
+                st.info("No se encontraron noticias recientes.")
+
+            st.markdown(ai_summary)
+        
 
 with tab2:
     st.header("📊 Comparador de Tickers")
