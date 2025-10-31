@@ -13,6 +13,7 @@ import google.generativeai as genai
 import feedparser
 from datetime import datetime, timedelta
 import requests
+import urllib.parse
 
 # Configuración de la API de Gemini (usa tu clave)
 # Si usás Streamlit Cloud, podés guardarla en st.secrets["GEMINI_API_KEY"]
@@ -231,63 +232,79 @@ def is_etf(info: dict) -> bool:
 # Noticias recientes y análisis con IA
 # --------------------------
 
-import urllib.parse
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def fetch_recent_news(query: str, days: int = 7, max_items: int = 5):
-    """Busca noticias recientes sobre la empresa o ticker en Google News RSS."""
+def fetch_recent_news(query: str, days: int = 7, max_items_per_topic: int = 5):
+    """Busca noticias recientes sobre la empresa y el contexto macroeconómico."""
     if not query:
         return []
 
     end_date = datetime.now()
     start_date = end_date - timedelta(days=days)
+    encoded_query = urllib.parse.quote_plus(f"{query} stock OR finance OR earnings")
 
-    # Codificar la query correctamente
-    encoded_query = urllib.parse.quote_plus(f"{query} stock finance")
+    def fetch_feed(search_query):
+        feed_url = (
+            f"https://news.google.com/rss/search?q={search_query}+after:{start_date.strftime('%Y-%m-%d')}"
+            f"&hl=en-US&gl=US&ceid=US:en"
+        )
+        try:
+            feed = feedparser.parse(feed_url)
+            return [{
+                "title": e.title,
+                "link": e.link,
+                "published": getattr(e, "published", ""),
+                "summary": getattr(e, "summary", "")
+            } for e in feed.entries[:max_items_per_topic]]
+        except Exception:
+            return []
 
-    feed_url = (
-        f"https://news.google.com/rss/search?q={encoded_query}+after:{start_date.strftime('%Y-%m-%d')}"
-        f"&hl=en-US&gl=US&ceid=US:en"
-    )
+    # Noticias sobre la empresa (micro)
+    micro_news = fetch_feed(encoded_query)
 
-    import feedparser
-    try:
-        feed = feedparser.parse(feed_url)
-        items = []
-        for entry in feed.entries[:max_items]:
-            items.append({
-                "title": entry.title,
-                "link": entry.link,
-                "published": getattr(entry, "published", ""),
-                "summary": getattr(entry, "summary", "")
-            })
-        return items
-    except Exception as e:
-        st.error(f"Error al obtener noticias: {e}")
-        return []
+    # Noticias macroeconómicas generales
+    macro_topics = [
+        "US Federal Reserve interest rates",
+        "inflation CPI United States",
+        "global economic outlook OR IMF",
+        "oil prices OR energy market",
+        "US-China trade agreement OR tariffs",
+        "stock market volatility OR investor sentiment",
+    ]
+    macro_news = []
+    for topic in macro_topics:
+        macro_news.extend(fetch_feed(urllib.parse.quote_plus(topic)))
+
+    # Combinar, priorizando las micro (empresa)
+    all_news = micro_news + macro_news
+    seen_titles = set()
+    deduped = []
+    for n in all_news:
+        if n["title"] not in seen_titles:
+            deduped.append(n)
+            seen_titles.add(n["title"])
+
+    return deduped[: max_items_per_topic * 2]  # limitar cantidad total
 
 
-
+@st.cache_data(ttl=1800, show_spinner=False)
 def analyze_news_with_gemini(ticker: str, news_list: list[dict]) -> str:
-    """
-    Usa Gemini para resumir y analizar las noticias de la empresa/ticker.
-    Retorna un resumen con sentimiento (Positivo / Negativo / Neutro).
-    """
+    """Analiza noticias micro y macro con Gemini para inferir tendencia de mercado."""
     if not news_list:
         return "⚪ No se encontraron noticias recientes para analizar."
 
     content = "\n".join([f"- {n['title']}: {n['summary']}" for n in news_list])
 
     prompt = f"""
-    Eres un analista financiero experto. Se te proporciona un resumen de las últimas noticias
-    sobre la acción {ticker}. Analiza si el sentimiento general sugiere que el precio de la acción
-    podría subir, bajar o mantenerse estable en el corto plazo.
-    Da una respuesta breve en español con este formato:
+    Eres un analista financiero experto. Se te proporcionan noticias recientes tanto sobre la acción {ticker}
+    como sobre la situación macroeconómica global (tasas, inflación, comercio, materias primas, etc.).
 
-    Sentimiento general: [Positivo / Negativo / Neutro]
-    Justificación: [breve explicación clara y directa basada en las noticias]
-    
-    Noticias:
+    Tu tarea:
+    1. Evalúa si el contexto general es favorable o desfavorable para las acciones en general y para {ticker}.
+    2. Determina el sentimiento global del mercado (Positivo / Negativo / Neutro).
+    3. Explica brevemente por qué, con referencias a los temas mencionados.
+
+    Noticias recientes:
     {content}
     """
 
@@ -297,7 +314,6 @@ def analyze_news_with_gemini(ticker: str, news_list: list[dict]) -> str:
         return response.text.strip()
     except Exception as e:
         return f"⚠️ Error al generar análisis con Gemini: {e}"
-
 
 # --------------------------
 # Lógica de análisis
