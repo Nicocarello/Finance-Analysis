@@ -231,27 +231,41 @@ def is_etf(info: dict) -> bool:
 # Noticias recientes y análisis con IA
 # --------------------------
 
+import urllib.parse
+
+@st.cache_data(ttl=3600, show_spinner=False)
 def fetch_recent_news(query: str, days: int = 7, max_items: int = 5):
-    """
-    Busca noticias recientes sobre la empresa/ticker usando Google News RSS.
-    No requiere API Key.
-    """
+    """Busca noticias recientes sobre la empresa o ticker en Google News RSS."""
+    if not query:
+        return []
+
     end_date = datetime.now()
     start_date = end_date - timedelta(days=days)
+
+    # Codificar la query correctamente
+    encoded_query = urllib.parse.quote_plus(f"{query} stock finance")
+
     feed_url = (
-        f"https://news.google.com/rss/search?q={query}+stock+finance+after:{start_date.strftime('%Y-%m-%d')}"
+        f"https://news.google.com/rss/search?q={encoded_query}+after:{start_date.strftime('%Y-%m-%d')}"
         f"&hl=en-US&gl=US&ceid=US:en"
     )
-    feed = feedparser.parse(feed_url)
-    items = []
-    for entry in feed.entries[:max_items]:
-        items.append({
-            "title": entry.title,
-            "link": entry.link,
-            "published": getattr(entry, "published", ""),
-            "summary": getattr(entry, "summary", "")
-        })
-    return items
+
+    import feedparser
+    try:
+        feed = feedparser.parse(feed_url)
+        items = []
+        for entry in feed.entries[:max_items]:
+            items.append({
+                "title": entry.title,
+                "link": entry.link,
+                "published": getattr(entry, "published", ""),
+                "summary": getattr(entry, "summary", "")
+            })
+        return items
+    except Exception as e:
+        st.error(f"Error al obtener noticias: {e}")
+        return []
+
 
 
 def analyze_news_with_gemini(ticker: str, news_list: list[dict]) -> str:
