@@ -170,18 +170,42 @@ def get_ticker_obj(ticker: str):
 
 @st.cache_data(show_spinner=False, ttl=1800)
 def get_ticker_info(ticker: str) -> dict:
-    # Datos serializables -> cache_data
+    """
+    Obtiene la información del ticker combinando get_info(), fast_info y fallback manual.
+    """
     t = get_ticker_obj(ticker)
     info = {}
     try:
         info = t.get_info() or {}
     except Exception:
-        try:
-            fi = t.fast_info or {}
-            info = dict(fi)
-        except Exception:
-            info = {}
+        info = {}
+
+    # Intentar complementar con fast_info
+    try:
+        fi = t.fast_info or {}
+        for k, v in fi.items():
+            if k not in info or info[k] is None:
+                info[k] = v
+    except Exception:
+        pass
+
+    # Calcular algunos ratios básicos si hay datos de balance disponibles
+    try:
+        fin = t.financials
+        bs = t.balance_sheet
+        if not fin.empty and not bs.empty:
+            income = fin.loc["Net Income"].iloc[0] if "Net Income" in fin.index else None
+            equity = bs.loc["Total Stockholder Equity"].iloc[0] if "Total Stockholder Equity" in bs.index else None
+            assets = bs.loc["Total Assets"].iloc[0] if "Total Assets" in bs.index else None
+            if income and equity:
+                info["returnOnEquity"] = float(income / equity)
+            if income and assets:
+                info["returnOnAssets"] = float(income / assets)
+    except Exception:
+        pass
+
     return info
+
 
 @st.cache_data(show_spinner=False, ttl=900)
 def get_history(ticker: str, period: str, interval: str):
