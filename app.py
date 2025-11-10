@@ -19,12 +19,46 @@ import urllib.parse
 # Si usás Streamlit Cloud, podés guardarla en st.secrets["GEMINI_API_KEY"]
 genai.configure(api_key=st.secrets.get("GEMINI_API_KEY", "TU_API_KEY_AQUI"))
 
-
-
 # --------------------------
 # Config & helpers
 # --------------------------
 st.set_page_config(page_title="Analizador de Acciones & ETFs", layout="wide")
+
+# --- CSS PERSONALIZADO PARA MEJORAR UI/UX ---
+# Inyectamos nuestro CSS personalizado para "efectos"
+st.markdown("""
+<style>
+    /* Cambiar el estilo de las métricas (cajas de st.metric) */
+    [data-testid="stMetric"] {
+        background-color: #0E1117; /* Fondo de la caja */
+        border: 1px solid #2E333D;  /* Borde sutil */
+        border-radius: 10px;        /* Bordes redondeados */
+        padding: 15px;              /* Espaciado interno */
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); /* Sombra suave */
+        transition: all 0.3s ease; /* Transición para el hover */
+    }
+
+    /* Efecto "hover" (pasar el ratón) para las métricas */
+    [data-testid="stMetric"]:hover {
+        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2); /* Sombra más pronunciada */
+        border: 1px solid #4A90E2; /* Borde con el color primario */
+    }
+
+    /* Mejorar las pestañas (tabs) */
+    [data-testid="stTabs"] button {
+        color: #B0B0B0; /* Color del texto de la pestaña inactiva */
+        padding: 8px 16px;
+        border-radius: 8px;
+    }
+    
+    /* Pestaña activa */
+    [data-testid="stTabs"] button[aria-selected="true"] {
+        color: #FFFFFF; /* Texto blanco */
+        background-color: #4A90E2; /* Fondo con color primario */
+    }
+</style>
+""", unsafe_allow_html=True)
+# --- FIN DE CSS PERSONALIZADO ---
 
 def fmt_pct(x, nd=2):
     return f"{x:.{nd}%}" if x is not None and pd.notna(x) else "—"
