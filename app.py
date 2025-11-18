@@ -824,6 +824,41 @@ with tab1:
                 st.info("No se encontraron noticias recientes.")
 
             st.markdown(ai_summary)
+            # --- Resumen estratégico (Advisor AI) ---
+            try:
+                summary_prompt = f"""
+                Actúa como un analista financiero senior. Con base en los siguientes datos:
+                - Evaluación fundamental: {decision}, score {meta['score']*100:.0f}%
+                - Cambio de precio en el período: {period_performance:.2% if period_performance else '—'}
+                - Métricas de riesgo: Sharpe {fmt_num(rm.get('Sharpe')) if 'rm' in locals() else '—'}, Calmar {fmt_num(rm.get('Calmar')) if 'rm' in locals() else '—'}
+                - Análisis de noticias recientes: {ai_summary}
+            
+                Redacta un resumen ejecutivo de 3–4 líneas en tono profesional, indicando:
+                1. La situación general de la acción {ticker}.
+                2. Oportunidades o riesgos destacados.
+                3. Un veredicto orientativo (Positivo, Neutro o Negativo).
+                """
+            
+                model = genai.GenerativeModel("gemini-2.0-flash")
+                advisor_response = model.generate_content(summary_prompt)
+                st.subheader("💬 Resumen Estratégico (Advisor AI)")
+                st.success(advisor_response.text.strip())
+            except Exception as e:
+                st.caption(f"⚠️ No se pudo generar el resumen estratégico: {e}")
+
+            # --- Contexto macroeconómico general ---
+            try:
+                macro_prompt = """
+                Resume en 3 frases las principales tendencias macroeconómicas globales 
+                (tasas de interés, inflación, materias primas, sentimiento del mercado) al día de hoy.
+                Usa un lenguaje conciso y profesional.
+                """
+                macro_resp = model.generate_content(macro_prompt)
+                st.subheader("🌍 Contexto Macroeconómico Global")
+                st.markdown(macro_resp.text.strip())
+            except Exception:
+                st.caption("No se pudo obtener el resumen macroeconómico.")
+
         
 
 with tab2:
