@@ -8,6 +8,7 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import statsmodels.api as sm
+from streamlit_extras.stylable_container import stylable_container
 # --- IA y Noticias ---
 import google.generativeai as genai
 import feedparser
@@ -577,20 +578,39 @@ with tab1:
 
             # 1) Precio y variación
             cols_price = st.columns(5)
-            cols_price[0].metric("Precio Actual", f"{last_close:.2f}" if last_close is not None else "—")
-            cols_price[1].metric(
-                f"Cambio {periodo}",
-                f"{period_performance:.2%}" if period_performance is not None else "—",
-                delta=f"{period_performance:.2%}" if period_performance is not None else None
-            )
-            cols_price[2].metric("Máximo del Período", f"{max_periodo:.2f}" if max_periodo is not None else "—")
-            cols_price[3].metric("Mínimo del Período", f"{min_periodo:.2f}" if min_periodo is not None else "—")
-            cols_price[4].metric(
-                "Volumen Hoy",
-                f"{fmt_bil(last_volume)}" if last_volume is not None else "—",
-                delta=f"{vol_delta:.1%}" if vol_delta is not None else None,
-                help="Comparado con el promedio de 50 días."
-            )
+            def card(title, value, subtitle=None, color="#4A90E2", icon="📈"):
+                with stylable_container(
+                    key=title,
+                    css_styles=f"""
+                        background-color: #1B1F24;
+                        border-radius: 12px;
+                        padding: 16px;
+                        border: 1px solid rgba(255,255,255,0.1);
+                        text-align: center;
+                    """,
+                ):
+                    st.markdown(
+                        f"""
+                        <div style='font-size:22px'>{icon}</div>
+                        <div style='font-weight:600; font-size:16px; color:#ccc'>{title}</div>
+                        <div style='font-size:22px; font-weight:700; color:{color}'>{value}</div>
+                        <div style='font-size:13px; color:#999'>{subtitle or ""}</div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+                    
+            col1, col2, col3, col4, col5 = st.columns(5)
+            with col1:
+                card("Precio Actual", f"{last_close:.2f}", subtitle="Cierre más reciente", icon="💰")
+            with col2:
+                card("Cambio", f"{period_performance:.2%}", subtitle=f"en {periodo}", color="green" if period_performance>0 else "red")
+            with col3:
+                card("Máximo", f"{max_periodo:.2f}", subtitle="del período", icon="📈")
+            with col4:
+                card("Mínimo", f"{min_periodo:.2f}", subtitle="del período", icon="📉")
+            with col5:
+                card("Volumen", fmt_bil(last_volume), subtitle="último día", icon="📊")
+
 
             # 2) Meta fundamental
             cols_meta = st.columns(4)
