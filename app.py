@@ -527,8 +527,11 @@ with st.sidebar:
     benchmark = st.selectbox("Benchmark para Beta", ["SPY", "QQQ", "EFA", "IWM"], index=0)
 
     st.subheader("Análisis con IA")
-    ai_enabled = st.checkbox("Activar análisis con Gemini", value=True,
-                             help="Obtiene y analiza noticias recientes con IA para predecir tendencia.")
+    ai_enabled = st.checkbox(
+        "🧠 Activar análisis con Gemini",
+        value=True,
+        help="Obtiene y analiza noticias recientes con IA para inferir la tendencia del mercado del activo."
+    )
 
 # --------------------------
 # Tabs
