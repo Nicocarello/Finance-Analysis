@@ -482,6 +482,18 @@ with st.sidebar:
     st.header("Parámetros")
     ticker = st.text_input("Ticker (ej: AAPL, MSFT, SPY)", "AAPL").strip().upper()
 
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        ticker = st.text_input("Ticker (ej: AAPL, MSFT, SPY)", "AAPL").strip().upper()
+    with col2:
+        refresh = st.button("🔄 Actualizar")
+    
+    # Si se presiona el botón, limpiar cache y volver a correr
+    if refresh:
+        st.cache_data.clear()
+        st.cache_resource.clear()
+        st.toast("Datos actualizados.", icon="♻️")
+
     st.subheader("Umbrales")
     pe_thr = st.number_input("Umbral P/E (trailing) máximo", min_value=1.0, max_value=100.0, value=15.0, step=0.5)
     roe_thr = st.number_input("Umbral ROE mínimo", min_value=0.0, max_value=1.0, value=0.15, step=0.01)
