@@ -22,6 +22,14 @@ genai.configure(api_key=st.secrets.get("GEMINI_API_KEY", "TU_API_KEY_AQUI"))
 # --------------------------
 # Config & helpers
 # --------------------------
+
+# Mensaje de bienvenida
+st.info(
+    "💡 **Consejo:** Probá con tickers como `AAPL`, `MSFT`, `TSLA` o `SPY` "
+    "para explorar análisis fundamental, técnico y de noticias con IA."
+)
+
+
 st.set_page_config(page_title="Analizador de Acciones & ETFs", layout="wide")
 
 # --- CSS PERSONALIZADO PARA MEJORAR UI/UX ---
