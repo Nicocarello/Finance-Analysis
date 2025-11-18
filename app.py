@@ -702,30 +702,6 @@ with tab1:
         df_fund = df_fund[[c for c in order_cols if c in df_fund.columns]]
         st.dataframe(df_fund, use_container_width=True)
 
-        # Radar chart con ratios normalizados
-        radar_metrics = {
-            "ROE": roe or 0,
-            "ROA": roa or 0,
-            "Profit Margins": profit_margins or 0,
-            "Dividend Yield": dividend_yield or 0,
-        }
-        
-        radar_df = pd.Series(radar_metrics)
-        if not radar_df.empty:
-            fig_radar = go.Figure()
-            fig_radar.add_trace(go.Scatterpolar(
-                r=radar_df.values * 100,
-                theta=radar_df.index,
-                fill='toself',
-                name=ticker
-            ))
-            fig_radar.update_layout(
-                polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
-                showlegend=False,
-                title=f"🌐 Perfil Financiero de {ticker}"
-            )
-            st.plotly_chart(fig_radar, use_container_width=True)
-
 
         st.subheader("📌 Evaluación Fundamental")
         st.write("**Explicación de métricas:**")
