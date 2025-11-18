@@ -702,76 +702,6 @@ with tab1:
         df_fund = df_fund[[c for c in order_cols if c in df_fund.columns]]
         st.dataframe(df_fund, use_container_width=True)
 
-        # =========================================
-        # 🌐 RADAR CHART DE RATIOS FUNDA
-        # =========================================
-        
-        try:
-            # Extraer los valores relevantes del DataFrame de ratios
-            radar_metrics = {
-                "ROE": df_fund.get("ROE", [0])[0],
-                "ROA": df_fund.get("ROA", [0])[0],
-                "Profit Margins": df_fund.get("Profit Margins", [0])[0],
-                "Dividend Yield": df_fund.get("Dividend Yield", [0])[0],
-            }
-        
-            # Normalizar valores numéricos (convertir strings tipo "12.3%" a float)
-            radar_clean = {}
-            for k, v in radar_metrics.items():
-                if v is None or (isinstance(v, str) and v.strip() == "—"):
-                    val = 0.0
-                else:
-                    try:
-                        val = float(str(v).replace("%", "").strip())
-                    except Exception:
-                        val = 0.0
-                radar_clean[k] = val
-        
-            radar_df = pd.Series(radar_clean)
-        
-            # Determinar color según tipo de activo (ETF o acción)
-            color_chart = "#B57EDC" if meta.get("is_etf") else "#4CAF50"
-        
-            # Mostrar solo si hay datos válidos
-            if radar_df.sum() > 0:
-                fig_radar = go.Figure()
-        
-                fig_radar.add_trace(go.Scatterpolar(
-                    r=radar_df.values,
-                    theta=radar_df.index,
-                    fill='toself',
-                    name=ticker,
-                    line_color=color_chart,
-                    fillcolor=color_chart,
-                    opacity=0.4
-                ))
-        
-                fig_radar.update_layout(
-                    polar=dict(
-                        bgcolor="#0E1117",
-                        radialaxis=dict(
-                            visible=True,
-                            range=[0, max(radar_df.max() * 1.2, 10)],
-                            showline=True,
-                            gridcolor="rgba(255,255,255,0.1)",
-                            color="#AAA"
-                        ),
-                        angularaxis=dict(showline=False, color="#AAA")
-                    ),
-                    title=f"🌐 Perfil Financiero de {ticker}",
-                    showlegend=False,
-                    paper_bgcolor="#0E1117",
-                    font=dict(color="#EEE")
-                )
-        
-                st.plotly_chart(fig_radar, use_container_width=True)
-            else:
-                st.caption("No hay datos suficientes para generar el gráfico radar.")
-        
-        except Exception as e:
-            st.caption(f"⚠️ No se pudo generar el radar chart: {e}")
-
-
 
         st.subheader("📌 Evaluación Fundamental")
         st.write("**Explicación de métricas:**")
@@ -1189,24 +1119,6 @@ with tab2:
                             hover_data=["Nombre", "Resultado", "P/E Trailing", "ROE", "P/B"]
                         )
                         st.plotly_chart(fig_rank, use_container_width=True)
-
-                        # Correlación entre precios de los tickers
-                    if len(tickers) > 2:
-                        st.subheader("📊 Correlación entre Tickers (último período)")
-                        hist_map = get_histories_batch(tickers, periodo, intervalo)
-                        close_data = {}
-                        for tk, df in hist_map.items():
-                            if not df.empty and "Close" in df.columns:
-                                close_data[tk] = df["Close"]
-                    
-                        if close_data:
-                            close_df = pd.DataFrame(close_data).pct_change().dropna()
-                            corr = close_df.corr()
-                            fig_corr = px.imshow(
-                                corr, text_auto=".2f", color_continuous_scale="RdBu_r", zmin=-1, zmax=1,
-                                title="Matriz de Correlación entre Activos"
-                            )
-                            st.plotly_chart(fig_corr, use_container_width=True)
 
                     # Scatter ROE vs P/B (tamaño=Market Cap)
                     if all(col in df_sorted.columns for col in ["ROE", "P/B", "Ticker"]):
