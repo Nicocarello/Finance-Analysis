@@ -493,9 +493,22 @@ with st.sidebar:
         st.toast("Datos actualizados.", icon="♻️")
 
     st.subheader("Umbrales")
-    pe_thr = st.number_input("Umbral P/E (trailing) máximo", min_value=1.0, max_value=100.0, value=15.0, step=0.5)
-    roe_thr = st.number_input("Umbral ROE mínimo", min_value=0.0, max_value=1.0, value=0.15, step=0.01)
-    pb_thr = st.number_input("Umbral P/B máximo", min_value=0.1, max_value=20.0, value=2.0, step=0.1)
+    pe_thr = st.number_input(
+        "Umbral P/E (trailing) máximo",
+        min_value=1.0, max_value=100.0, value=15.0, step=0.5,
+        help="Relación Precio/Beneficio: cuanto más bajo, más barata está la acción según sus ganancias pasadas."
+    )
+    roe_thr = st.number_input(
+        "Umbral ROE mínimo",
+        min_value=0.0, max_value=1.0, value=0.15, step=0.01,
+        help="Rentabilidad sobre el capital: mide la eficiencia del uso del capital propio."
+    )
+    pb_thr = st.number_input(
+        "Umbral P/B máximo",
+        min_value=0.1, max_value=20.0, value=2.0, step=0.1,
+        help="Precio/Valor contable: compara el valor de mercado con el valor contable por acción."
+    )
+
 
     st.subheader("Pesos")
     w_pe = st.slider("Peso P/E", 0.0, 1.0, 0.34)
