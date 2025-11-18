@@ -826,11 +826,16 @@ with tab1:
             st.markdown(ai_summary)
             # --- Resumen estratégico (Advisor AI) ---
             try:
+                # formatear valores seguros
+                perf_str = f"{period_performance:.2%}" if period_performance is not None else "—"
+                sharpe_str = fmt_num(rm.get('Sharpe')) if 'rm' in locals() and rm else "—"
+                calmar_str = fmt_num(rm.get('Calmar')) if 'rm' in locals() and rm else "—"
+            
                 summary_prompt = f"""
                 Actúa como un analista financiero senior. Con base en los siguientes datos:
                 - Evaluación fundamental: {decision}, score {meta['score']*100:.0f}%
-                - Cambio de precio en el período: {period_performance:.2% if period_performance else '—'}
-                - Métricas de riesgo: Sharpe {fmt_num(rm.get('Sharpe')) if 'rm' in locals() else '—'}, Calmar {fmt_num(rm.get('Calmar')) if 'rm' in locals() else '—'}
+                - Cambio de precio en el período: {perf_str}
+                - Métricas de riesgo: Sharpe {sharpe_str}, Calmar {calmar_str}
                 - Análisis de noticias recientes: {ai_summary}
             
                 Redacta un resumen ejecutivo de 3–4 líneas en tono profesional, indicando:
@@ -845,6 +850,7 @@ with tab1:
                 st.success(advisor_response.text.strip())
             except Exception as e:
                 st.caption(f"⚠️ No se pudo generar el resumen estratégico: {e}")
+
 
             # --- Contexto macroeconómico general ---
             try:
