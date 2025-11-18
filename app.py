@@ -1190,6 +1190,24 @@ with tab2:
                         )
                         st.plotly_chart(fig_rank, use_container_width=True)
 
+                        # Correlación entre precios de los tickers
+                    if len(tickers) > 2:
+                        st.subheader("📊 Correlación entre Tickers (último período)")
+                        hist_map = get_histories_batch(tickers, periodo, intervalo)
+                        close_data = {}
+                        for tk, df in hist_map.items():
+                            if not df.empty and "Close" in df.columns:
+                                close_data[tk] = df["Close"]
+                    
+                        if close_data:
+                            close_df = pd.DataFrame(close_data).pct_change().dropna()
+                            corr = close_df.corr()
+                            fig_corr = px.imshow(
+                                corr, text_auto=".2f", color_continuous_scale="RdBu_r", zmin=-1, zmax=1,
+                                title="Matriz de Correlación entre Activos"
+                            )
+                            st.plotly_chart(fig_corr, use_container_width=True)
+
                     # Scatter ROE vs P/B (tamaño=Market Cap)
                     if all(col in df_sorted.columns for col in ["ROE", "P/B", "Ticker"]):
                         # Convertir ROE/PB a valores numéricos para el scatter
