@@ -578,77 +578,103 @@ with tab1:
 
             # 1) Precio y variación
             cols_price = st.columns(5)
+            # --- FUNCIÓN CARD (versión HTML pura, sin dependencias externas) ---
             def card(title, value, subtitle=None, color="#4A90E2", icon="📈"):
-                with stylable_container(
-                    key=title,
-                    css_styles=f"""
-                        background-color: #1B1F24;
-                        border-radius: 12px;
-                        padding: 16px;
-                        border: 1px solid rgba(255,255,255,0.1);
-                        text-align: center;
-                    """,
-                ):
-                    st.markdown(
-                        f"""
+                st.markdown(
+                    f"""
+                    <div style="
+                        background-color:#1B1F24;
+                        border-radius:12px;
+                        padding:16px;
+                        border:1px solid rgba(255,255,255,0.1);
+                        text-align:center;
+                        margin-bottom:10px;">
                         <div style='font-size:22px'>{icon}</div>
                         <div style='font-weight:600; font-size:16px; color:#ccc'>{title}</div>
                         <div style='font-size:22px; font-weight:700; color:{color}'>{value}</div>
                         <div style='font-size:13px; color:#999'>{subtitle or ""}</div>
-                        """,
-                        unsafe_allow_html=True,
-                    )
-                    
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+            
+            
+            # ==========================
+            # 1️⃣ Precio y variación
+            # ==========================
             col1, col2, col3, col4, col5 = st.columns(5)
             with col1:
                 card("Precio Actual", f"{last_close:.2f}", subtitle="Cierre más reciente", icon="💰")
             with col2:
-                card("Cambio", f"{period_performance:.2%}", subtitle=f"en {periodo}", color="green" if period_performance>0 else "red")
+                card(
+                    "Cambio",
+                    f"{period_performance:.2%}" if period_performance is not None else "—",
+                    subtitle=f"en {periodo}",
+                    color="limegreen" if (period_performance and period_performance > 0) else "tomato",
+                    icon="📊"
+                )
             with col3:
-                card("Máximo", f"{max_periodo:.2f}", subtitle="del período", icon="📈")
+                card("Máximo", f"{max_periodo:.2f}" if max_periodo is not None else "—", subtitle="del período", icon="📈")
             with col4:
-                card("Mínimo", f"{min_periodo:.2f}", subtitle="del período", icon="📉")
+                card("Mínimo", f"{min_periodo:.2f}" if min_periodo is not None else "—", subtitle="del período", icon="📉")
             with col5:
-                card("Volumen", fmt_bil(last_volume), subtitle="último día", icon="📊")
-
-
-            # 2) Meta fundamental
-            cols_meta = st.columns(4)
-            cols_meta[0].metric("Resultado Fundamental", decision)
-            cols_meta[1].metric("Puntaje", f"{meta['score']*100:.0f} %")
-            cols_meta[2].metric("Market Cap", fmt_bil(get_ticker_info(ticker).get("marketCap")))
-            cols_meta[3].metric("Moneda/Exchange", f"{meta['currency']} · {meta['exchange']}")
-
+                card("Volumen", fmt_bil(last_volume), subtitle="último día", icon="📦")
+            
             st.write("---")
-
-            # 3) Métricas de riesgo (Sharpe→Calmar→DD→Ret→Vol)
+            
+            # ==========================
+            # 2️⃣ Meta fundamental
+            # ==========================
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                card("Resultado Fundamental", decision, icon="🧮", color="#FFD700")
+            with col2:
+                card("Puntaje", f"{meta['score']*100:.0f} %", subtitle="Evaluación combinada", icon="⭐")
+            with col3:
+                card("Market Cap", fmt_bil(get_ticker_info(ticker).get("marketCap")), subtitle="Capitalización", icon="🏦")
+            with col4:
+                card("Moneda / Exchange", f"{meta['currency']} · {meta['exchange']}", subtitle="", icon="💱")
+            
+            st.write("---")
+            
+            # ==========================
+            # 3️⃣ Métricas de riesgo
+            # ==========================
             if not plot_df.empty:
                 rm = risk_metrics(plot_df["Close"])
-                cols_rm = st.columns(5)
-                cols_rm[0].metric("Sharpe", fmt_num(rm.get("Sharpe")))
-                cols_rm[1].metric("Calmar", fmt_num(rm.get("Calmar")))
-                cols_rm[2].metric("Máx. DD", fmt_pct(rm.get("Máx. Drawdown")))
-                cols_rm[3].metric("Ret. Anual", fmt_pct(rm.get("Retorno Anualizado")))
-                cols_rm[4].metric("Vol. Anual", fmt_pct(rm.get("Volatilidad Anual")))
-
-            # 4) Sensibilidad al mercado (β, α, R²) – solo si hay benchmark válido
+                col1, col2, col3, col4, col5 = st.columns(5)
+                with col1:
+                    card("Sharpe", fmt_num(rm.get("Sharpe")), subtitle="Ratio de rentabilidad/riesgo", icon="⚙️")
+                with col2:
+                    card("Calmar", fmt_num(rm.get("Calmar")), subtitle="Rendimiento vs drawdown", icon="🧭")
+                with col3:
+                    card("Máx. Drawdown", fmt_pct(rm.get("Máx. Drawdown")), subtitle="Caída máxima", icon="📉", color="orange")
+                with col4:
+                    card("Ret. Anual", fmt_pct(rm.get("Retorno Anualizado")), subtitle="Rentabilidad esperada", icon="📈", color="limegreen")
+                with col5:
+                    card("Vol. Anual", fmt_pct(rm.get("Volatilidad Anual")), subtitle="Desviación estándar anual", icon="🌪️")
+            
+            st.write("---")
+            
+            # ==========================
+            # 4️⃣ Sensibilidad al mercado (CAPM)
+            # ==========================
             if not plot_df.empty and benchmark:
                 bench_hist = get_history(benchmark, periodo, intervalo)
                 if not bench_hist.empty:
-                    cols_mkt = st.columns(3)
-
-                    # β clásico (cov/var)
                     beta = compute_beta(plot_df["Close"], bench_hist["Close"])
-                    cols_mkt[0].metric("β vs Benchmark", fmt_num(beta))
-
-                    # α y R² con regresión CAPM
                     try:
                         alpha, beta_ols, r2 = capm_alpha(plot_df["Close"], bench_hist["Close"])
-                        cols_mkt[1].metric("α (CAPM) diario", fmt_pct(alpha))
-                        cols_mkt[2].metric("R² (CAPM)", fmt_num(r2))
                     except Exception:
-                        cols_mkt[1].metric("α (CAPM) diario", "—")
-                        cols_mkt[2].metric("R² (CAPM)", "—")
+                        alpha, beta_ols, r2 = None, None, None
+            
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        card("β vs Benchmark", fmt_num(beta), subtitle=f"Comparado con {benchmark}", icon="📉", color="#4A90E2")
+                    with col2:
+                        card("α (CAPM)", fmt_pct(alpha), subtitle="Rendimiento extra vs mercado", icon="⚡", color="#FFD700")
+                    with col3:
+                        card("R² (CAPM)", fmt_num(r2), subtitle="Ajuste del modelo CAPM", icon="📐", color="#B0E0E6")
 
 
         # Info ETF / rendimiento periodo
