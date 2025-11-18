@@ -484,7 +484,7 @@ with st.sidebar:
     with col1:
         ticker = st.text_input("Ticker (ej: AAPL, MSFT, SPY)", "AAPL").strip().upper()
     with col2:
-        refresh = st.button("🔄 Actualizar")
+        refresh = st.button("🔄")
     
     # Si se presiona el botón, limpiar cache y volver a correr
     if refresh:
