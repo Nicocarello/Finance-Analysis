@@ -480,8 +480,6 @@ st.title("📈 Analizador de Acciones & ETFs")
 
 with st.sidebar:
     st.header("Parámetros")
-    ticker = st.text_input("Ticker (ej: AAPL, MSFT, SPY)", "AAPL").strip().upper()
-
     col1, col2 = st.columns([3, 1])
     with col1:
         ticker = st.text_input("Ticker (ej: AAPL, MSFT, SPY)", "AAPL").strip().upper()
