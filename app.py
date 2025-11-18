@@ -36,33 +36,55 @@ st.set_page_config(page_title="Analizador de Acciones & ETFs", layout="wide")
 # Inyectamos nuestro CSS personalizado para "efectos"
 st.markdown("""
 <style>
-    /* Cambiar el estilo de las métricas (cajas de st.metric) */
+    /* Fuente moderna y color base */
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif;
+        color: #E0E0E0;
+        background-color: #0E1117;
+    }
+
+    /* Colores principales */
+    :root {
+        --primary: #4A90E2;
+        --secondary: #2E333D;
+    }
+
+    /* Métricas */
     [data-testid="stMetric"] {
-        background-color: #0E1117; /* Fondo de la caja */
-        border: 1px solid #2E333D;  /* Borde sutil */
-        border-radius: 10px;        /* Bordes redondeados */
-        padding: 15px;              /* Espaciado interno */
-        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); /* Sombra suave */
-        transition: all 0.3s ease; /* Transición para el hover */
+        background-color: var(--secondary);
+        border: 1px solid #2E333D;
+        border-radius: 10px;
+        padding: 15px;
+        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+        transition: all 0.3s ease;
     }
-
-    /* Efecto "hover" (pasar el ratón) para las métricas */
     [data-testid="stMetric"]:hover {
-        box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2); /* Sombra más pronunciada */
-        border: 1px solid #4A90E2; /* Borde con el color primario */
+        border-color: var(--primary);
+        box-shadow: 0 8px 16px rgba(74,144,226,0.2);
     }
 
-    /* Mejorar las pestañas (tabs) */
+    /* Tabs */
     [data-testid="stTabs"] button {
-        color: #B0B0B0; /* Color del texto de la pestaña inactiva */
+        color: #B0B0B0;
         padding: 8px 16px;
         border-radius: 8px;
+        transition: all 0.2s ease;
     }
-    
-    /* Pestaña activa */
     [data-testid="stTabs"] button[aria-selected="true"] {
-        color: #FFFFFF; /* Texto blanco */
-        background-color: #4A90E2; /* Fondo con color primario */
+        color: #FFFFFF;
+        background-color: var(--primary);
+    }
+
+    /* Inputs y botones */
+    .stButton > button {
+        background-color: var(--primary);
+        color: white;
+        border-radius: 8px;
+        transition: all 0.2s ease;
+    }
+    .stButton > button:hover {
+        background-color: #3378C4;
     }
 </style>
 """, unsafe_allow_html=True)
