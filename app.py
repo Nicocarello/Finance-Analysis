@@ -16,7 +16,6 @@ import yfinance as yf
 import feedparser
 import requests
 import statsmodels.api as sm
-from streamlit_lottie import st_lottie
 
 import streamlit as st
 import plotly.express as px
@@ -461,13 +460,6 @@ Be factual, cite the 1–2 news titles that most support your claims inline (jus
         return f"⚠️ Error generando análisis con Gemini: {e}"
 
 
-@st.cache_data(show_spinner=False)
-def load_lottieurl(url: str):
-    r = requests.get(url)
-    if r.status_code != 200:
-        return None
-    return r.json()
-
 
 # -------------------------
 # Core analysis function (refactor of analizar_ticker)
@@ -852,11 +844,6 @@ with tab1:
         if ai_enabled:
             st.write("---")
             st.subheader("🧠 Análisis AI unificado (noticias + resumen + macro)")
-
-            c1, c2, c3 = st.columns([1, 2, 1])
-            ai_lottie = load_lottieurl("https://assets10.lottiefiles.com/packages/lf20_lk80fpsm.json")
-            with c2:
-                st_lottie(ai_lottie, speed=1, width=180, key="ai_loader")
             
             with st.spinner(f"🧠 Buscando noticias y generando análisis con Gemini..."):
                 query_name = meta.get("long_name") or ticker
