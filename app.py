@@ -16,6 +16,7 @@ import yfinance as yf
 import feedparser
 import requests
 import statsmodels.api as sm
+from streamlit_lottie import st_lottie
 
 import streamlit as st
 import plotly.express as px
@@ -34,6 +35,8 @@ from typing import Optional, Dict, List, Tuple, Any
 st.set_page_config(page_title="Analizador Optimizado de Acciones & ETFs", layout="wide")
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger("app")
+
+ai_lottie = load_lottieurl("https://assets10.lottiefiles.com/packages/lf20_lk80fpsm.json")
 
 # Load Gemini API key from secrets (recommended) or fall back to placeholder
 GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", None)
@@ -458,6 +461,15 @@ Be factual, cite the 1–2 news titles that most support your claims inline (jus
         LOG.exception("Error al llamar a Gemini: %s", e)
         return f"⚠️ Error generando análisis con Gemini: {e}"
 
+
+@st.cache_data(show_spinner=False)
+def load_lottieurl(url: str):
+    r = requests.get(url)
+    if r.status_code != 200:
+        return None
+    return r.json()
+
+
 # -------------------------
 # Core analysis function (refactor of analizar_ticker)
 # -------------------------
@@ -842,10 +854,15 @@ with tab1:
             st.write("---")
             st.subheader("🧠 Análisis AI unificado (noticias + resumen + macro)")
 
-            with st.spinner(f"Buscando noticias y generando análisis con Gemini..."):
+            c1, c2, c3 = st.columns([1, 2, 1])
+            with c2:
+                st_lottie(ai_lottie, speed=1, width=180, key="ai_loader")
+            
+            with st.spinner(f"🧠 Buscando noticias y generando análisis con Gemini..."):
                 query_name = meta.get("long_name") or ticker
                 news = fetch_recent_news(query_name, days=7, max_items_per_topic=6)
-                # Prepare a compact risk summary
+                
+                # Prepare risk summary
                 risk_desc = ""
                 try:
                     if not plot_df.empty:
@@ -855,10 +872,10 @@ with tab1:
                         risk_desc = "No historical risk metrics available."
                 except Exception:
                     risk_desc = "No historical risk metrics available."
-
+            
                 perf_str = f"{fmt_pct(period_perf)} over {periodo}" if period_perf is not None else "—"
-
                 ai_text = analyze_news_and_generate_advice(ticker, news, perf_str, risk_desc)
+
 
             if news:
                 with st.expander("🗞️ Ver noticias recientes"):
