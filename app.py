@@ -301,7 +301,7 @@ def get_gemini_model():
     """Cache the model object (initializes once)."""
     try:
         # Use "gemini-2.0-pro" as requested
-        model = genai.GenerativeModel("gemini-2.0-pro")
+        model = genai.GenerativeModel("gemini-pro")
         return model
     except Exception as e:
         LOG.warning("No se pudo inicializar Gemini: %s", e)
