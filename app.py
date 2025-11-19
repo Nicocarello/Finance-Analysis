@@ -576,7 +576,7 @@ with st.sidebar:
     with col1:
         ticker = st.text_input("Ticker (ej: AAPL, MSFT, SPY)", "AAPL").strip().upper()
     with col2:
-        refresh = st.button("🔄 Reset cache & rerun")
+        refresh = st.button("🔄")
 
     if refresh:
         st.cache_data.clear()
