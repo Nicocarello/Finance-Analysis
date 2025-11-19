@@ -36,7 +36,6 @@ st.set_page_config(page_title="Analizador Optimizado de Acciones & ETFs", layout
 logging.basicConfig(level=logging.INFO)
 LOG = logging.getLogger("app")
 
-ai_lottie = load_lottieurl("https://assets10.lottiefiles.com/packages/lf20_lk80fpsm.json")
 
 # Load Gemini API key from secrets (recommended) or fall back to placeholder
 GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", None)
@@ -855,6 +854,7 @@ with tab1:
             st.subheader("🧠 Análisis AI unificado (noticias + resumen + macro)")
 
             c1, c2, c3 = st.columns([1, 2, 1])
+            ai_lottie = load_lottieurl("https://assets10.lottiefiles.com/packages/lf20_lk80fpsm.json")
             with c2:
                 st_lottie(ai_lottie, speed=1, width=180, key="ai_loader")
             
