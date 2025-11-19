@@ -593,7 +593,7 @@ with st.sidebar:
         st.cache_data.clear()
         st.cache_resource.clear()
         st.toast("Cache limpiada. Recargando...", icon="♻️")
-        st.experimental_rerun()
+        st.rerun()
 
     st.subheader("Umbrales")
     pe_thr = st.number_input("Umbral P/E (trailing) máximo", min_value=1.0, max_value=200.0, value=15.0, step=0.5)
