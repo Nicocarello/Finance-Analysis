@@ -51,12 +51,63 @@ except Exception as e:
 st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap');
-html, body, [class*="css"] { font-family: 'Inter', sans-serif; color: #E6EEF3; background-color: #0E1117; }
-:root { --primary: #4A90E2; --secondary: #2E333D; }
-.card { background-color:#15181C; border-radius:12px; padding:14px; border:1px solid rgba(255,255,255,0.04); }
-.small { font-size:12px; color:#99A0A6; }
+
+html, body, [class*="css"] {
+    font-family: 'Inter', sans-serif;
+    color: #D0D4D7;
+    background-color: #0E1117;
+}
+
+:root {
+    --primary: #4A90E2;
+    --secondary: #1A1D23;
+}
+
+.card {
+    background-color: #1A1D23;
+    border-radius: 12px;
+    padding: 14px;
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    transition: all 0.3s ease;
+}
+
+.card:hover {
+    border-color: var(--primary);
+    background-color: #23262E;
+    transform: scale(1.01);
+    box-shadow: 0 0 10px rgba(74, 144, 226, 0.3);
+}
+
+.small {
+    font-size: 12px;
+    color: #99A0A6;
+}
+
+/* Buttons */
+.stButton>button {
+    background-color: var(--primary);
+    color: white;
+    padding: 0.4em 1em;
+    border-radius: 6px;
+    border: none;
+    font-weight: 600;
+    transition: background 0.3s ease, transform 0.2s ease;
+}
+
+.stButton>button:hover {
+    background-color: #357ABD;
+    transform: scale(1.03);
+}
+
+/* Sidebar polish */
+section[data-testid="stSidebar"] {
+    background-color: #14171C;
+    border-right: 1px solid rgba(255,255,255,0.05);
+}
+
 </style>
 """, unsafe_allow_html=True)
+
 
 # -------------------------
 # Helpers / Formatting
